@@ -6,6 +6,8 @@ import styles from './EffectsPanel.module.css'
 
 interface EffectsPanelProps {
   audioUrl: string
+  voiceBuffer: AudioBuffer
+  beatBuffer: AudioBuffer
   autotuneEnabled: boolean
   autotuneAmount: number
   rootNote: string
@@ -26,6 +28,8 @@ interface EffectsPanelProps {
 
 export default function EffectsPanel({
   audioUrl,
+  voiceBuffer,
+  beatBuffer,
   autotuneEnabled,
   autotuneAmount,
   rootNote,
@@ -45,6 +49,7 @@ export default function EffectsPanel({
 }: EffectsPanelProps) {
   const audioContextRef = useRef<AudioContext | null>(null)
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null)
+  const beatSourceNodeRef = useRef<AudioBufferSourceNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
   const reverbConvolverRef = useRef<ConvolverNode | null>(null)
   const delayNodeRef = useRef<DelayNode | null>(null)
@@ -64,19 +69,17 @@ export default function EffectsPanel({
     // Initialize audio context
     audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
 
-    // Load audio buffer
-    fetch(audioUrl)
-      .then(response => response.arrayBuffer())
-      .then(arrayBuffer => audioContextRef.current!.decodeAudioData(arrayBuffer))
-      .then(buffer => setAudioBuffer(buffer))
-      .catch(console.error)
+    // Use voiceBuffer directly (we'll mix with beatBuffer during playback)
+    if (voiceBuffer) {
+      setAudioBuffer(voiceBuffer)
+    }
 
     return () => {
       if (audioContextRef.current) {
         audioContextRef.current.close()
       }
     }
-  }, [audioUrl])
+  }, [voiceBuffer])
 
   // Create reverb impulse response
   const createReverbImpulse = (context: AudioContext, seconds: number, decay: number): AudioBuffer => {
@@ -455,7 +458,7 @@ export default function EffectsPanel({
   }
 
   const playAudio = async () => {
-    if (!audioBuffer || !audioContextRef.current) return
+    if (!voiceBuffer || !beatBuffer || !audioContextRef.current) return
 
     const context = audioContextRef.current
     if (context.state === 'suspended') {
@@ -465,39 +468,56 @@ export default function EffectsPanel({
     // Stop any currently playing audio
     stopAudio()
 
-    let bufferToPlay = audioBuffer
+    // Process voice with autotune if enabled
+    let processedVoiceBuffer = voiceBuffer
     if (autotuneEnabled && autotuneAmount > 0) {
       // Clear previous pitch data before processing
       setPitchData([])
       // Process with autotune - this will populate pitchData (async)
-      bufferToPlay = await applyAutotune(audioBuffer)
+      processedVoiceBuffer = await applyAutotune(voiceBuffer)
     } else {
       // When autotune is disabled, still collect pitch data for visualization
       // but don't apply corrections
       setPitchData([])
     }
 
-    const source = context.createBufferSource()
-    const gainNode = context.createGain()
+    // Create sources for voice and beat
+    const voiceSource = context.createBufferSource()
+    const beatSource = context.createBufferSource()
+    voiceSource.buffer = processedVoiceBuffer
+    beatSource.buffer = beatBuffer
     
-    // Apply playback volume control with gain boost
-    gainNode.gain.value = (playbackVolume / 100) * defaultGainBoost
+    // Calculate if beat needs to loop to match voice length
+    const voiceDuration = processedVoiceBuffer.duration
+    const beatDuration = beatBuffer.duration
+    if (beatDuration < voiceDuration) {
+      beatSource.loop = true // Loop beat if it's shorter than voice
+    } else {
+      beatSource.loop = false // Don't loop if beat is longer
+    }
+
+    // Create gain nodes for volume control
+    const voiceGain = context.createGain()
+    const beatGain = context.createGain()
+    const masterGain = context.createGain()
     
-    source.buffer = bufferToPlay
+    // Apply volume controls
+    voiceGain.gain.value = (voiceVolume / 100) * (playbackVolume / 100) * defaultGainBoost
+    beatGain.gain.value = (beatVolume / 100) * (playbackVolume / 100)
+    masterGain.gain.value = 1.0
     
-    // Build effects chain: source -> gain -> [reverb] -> [echo] -> destination
-    source.connect(gainNode)
-    let currentNode: AudioNode = gainNode
+    // Connect voice: source -> gain -> [effects] -> master
+    voiceSource.connect(voiceGain)
+    let voiceNode: AudioNode = voiceGain
     
-    // Add reverb if enabled
+    // Add reverb to voice if enabled
     if (reverbAmount > 0) {
       const reverbConvolver = context.createConvolver()
-      const reverbGain = context.createGain()
       const dryGain = context.createGain()
       const wetGain = context.createGain()
       
       // Create impulse response for reverb
-      const impulseResponse = createReverbImpulse(context, 2, 2) // 2 seconds, decay 2
+      const impulseResponse = createReverbImpulse(context, 2, 2)
       reverbConvolver.buffer = impulseResponse
       
       // Mix dry and wet signals
@@ -506,8 +526,8 @@ export default function EffectsPanel({
       wetGain.gain.value = wetAmount * 0.5
       
       // Split signal: dry and wet paths
-      currentNode.connect(dryGain)
-      currentNode.connect(reverbConvolver)
+      voiceNode.connect(dryGain)
+      voiceNode.connect(reverbConvolver)
       reverbConvolver.connect(wetGain)
       
       // Merge dry and wet
@@ -515,54 +535,79 @@ export default function EffectsPanel({
       dryGain.connect(merger)
       wetGain.connect(merger)
       
-      currentNode = merger
+      voiceNode = merger
       reverbConvolverRef.current = reverbConvolver
     }
     
-    // Add echo/delay if enabled
+    // Add echo/delay to voice if enabled
     if (echoAmount > 0) {
-      const delay = context.createDelay(1.0) // Max 1 second delay
+      const delay = context.createDelay(1.0)
       const delayGain = context.createGain()
       const feedbackGain = context.createGain()
       const echoMix = context.createGain()
       
-      delay.delayTime.value = 0.3 // 300ms delay
+      delay.delayTime.value = 0.3
       delayGain.gain.value = echoAmount / 100
-      feedbackGain.gain.value = (echoAmount / 100) * 0.3 // Feedback
+      feedbackGain.gain.value = (echoAmount / 100) * 0.3
       echoMix.gain.value = 1.0
       
-      // Connect delay chain: input -> delay -> delayGain -> output
-      //                    input -> delay -> feedbackGain -> delay (feedback)
-      currentNode.connect(echoMix) // Direct signal
-      currentNode.connect(delay)
+      // Connect delay chain
+      voiceNode.connect(echoMix) // Direct signal
+      voiceNode.connect(delay)
       delay.connect(delayGain)
       delay.connect(feedbackGain)
       feedbackGain.connect(delay) // Feedback loop
       delayGain.connect(echoMix)
       
-      currentNode = echoMix
+      voiceNode = echoMix
       delayNodeRef.current = delay
       delayGainRef.current = delayGain
       feedbackGainRef.current = feedbackGain
     }
     
-    // Connect final node to destination
-    currentNode.connect(context.destination)
+    // Connect voice and beat to master gain, then to destination
+    voiceNode.connect(masterGain)
+    beatSource.connect(beatGain)
+    beatGain.connect(masterGain)
+    masterGain.connect(context.destination)
 
-    source.onended = () => {
+    // Stop beat when voice ends
+    voiceSource.onended = () => {
+      try {
+        beatSource.stop()
+      } catch (e) {
+        // Already stopped
+      }
       setIsPlaying(false)
     }
 
-    source.start(0)
-    sourceNodeRef.current = source
-    gainNodeRef.current = gainNode
+    // Start both sources simultaneously
+    const startTime = context.currentTime
+    voiceSource.start(startTime)
+    beatSource.start(startTime)
+
+    sourceNodeRef.current = voiceSource
+    beatSourceNodeRef.current = beatSource
+    gainNodeRef.current = masterGain
     setIsPlaying(true)
   }
 
   const stopAudio = () => {
     if (sourceNodeRef.current) {
-      sourceNodeRef.current.stop()
+      try {
+        sourceNodeRef.current.stop()
+      } catch (e) {
+        // Already stopped
+      }
       sourceNodeRef.current = null
+    }
+    if (beatSourceNodeRef.current) {
+      try {
+        beatSourceNodeRef.current.stop()
+      } catch (e) {
+        // Already stopped
+      }
+      beatSourceNodeRef.current = null
     }
     setIsPlaying(false)
   }

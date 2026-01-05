@@ -7,7 +7,7 @@ interface RealTimeAudioProcessorProps {
   isRecording: boolean
   beatVolume: number
   voiceVolume: number
-  onRecordingComplete: (audioBlob: Blob) => void
+  onRecordingComplete: (voiceBuffer: AudioBuffer, beatBuffer: AudioBuffer, duration: number) => void
 }
 
 export default function RealTimeAudioProcessor({
@@ -22,11 +22,14 @@ export default function RealTimeAudioProcessor({
   const beatSourceRef = useRef<AudioBufferSourceNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
   const beatGainNodeRef = useRef<GainNode | null>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
   const beatBufferRef = useRef<AudioBuffer | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
-  const recordingStreamRef = useRef<MediaStreamAudioDestinationNode | null>(null)
+  const voiceProcessorRef = useRef<ScriptProcessorNode | null>(null)
+  const beatProcessorRef = useRef<ScriptProcessorNode | null>(null)
+  const voiceSamplesRef = useRef<Float32Array[]>([])
+  const beatSamplesRef = useRef<Float32Array[]>([])
+  const recordingStartTimeRef = useRef<number>(0)
+  const recordingDurationRef = useRef<number>(0)
 
   // Initialize audio context and load beat
   useEffect(() => {
@@ -55,6 +58,12 @@ export default function RealTimeAudioProcessor({
   }, [beatUrl])
 
 
+  // Store callback in ref to avoid dependency issues
+  const onRecordingCompleteRef = useRef(onRecordingComplete)
+  useEffect(() => {
+    onRecordingCompleteRef.current = onRecordingComplete
+  }, [onRecordingComplete])
+
   // Start/stop recording
   useEffect(() => {
     if (!audioContextRef.current || !beatBufferRef.current) return
@@ -76,8 +85,7 @@ export default function RealTimeAudioProcessor({
               noiseSuppression: false, // Disable to avoid muffling
               autoGainControl: false, // Disable to avoid compression artifacts
               sampleRate: 48000, // Higher sample rate for better quality
-              channelCount: 1,
-              latency: 0 // Request lowest latency
+              channelCount: 1
             }
           })
           micStreamRef.current = micStream
@@ -85,10 +93,6 @@ export default function RealTimeAudioProcessor({
           // Create microphone source
           const micSource = context.createMediaStreamSource(micStream)
           micSourceRef.current = micSource
-
-          // Create destination for recording
-          const recordingDestination = context.createMediaStreamDestination()
-          recordingStreamRef.current = recordingDestination
 
           // Create gain nodes
           const micGain = context.createGain()
@@ -100,77 +104,69 @@ export default function RealTimeAudioProcessor({
           micGain.gain.value = voiceVolume / 100
           beatGain.gain.value = beatVolume / 100
 
-          // Connect microphone directly -> gain -> recording only (no compressor, no effects)
-          // Record completely clean audio without any processing that could cause muffling
+          // Create ScriptProcessorNodes to capture audio data separately
+          const bufferSize = 4096
+          const voiceProcessor = context.createScriptProcessor(bufferSize, 1, 1)
+          const beatProcessor = context.createScriptProcessor(bufferSize, 1, 1)
+          voiceProcessorRef.current = voiceProcessor
+          beatProcessorRef.current = beatProcessor
+
+          // Reset sample arrays
+          voiceSamplesRef.current = []
+          beatSamplesRef.current = []
+          recordingStartTimeRef.current = context.currentTime
+
+          // Capture voice samples
+          voiceProcessor.onaudioprocess = (e) => {
+            const inputData = e.inputBuffer.getChannelData(0)
+            const outputData = e.outputBuffer.getChannelData(0)
+            
+            // Store voice samples
+            voiceSamplesRef.current.push(new Float32Array(inputData))
+            
+            // Pass through for monitoring (but don't connect to destination)
+            outputData.set(inputData)
+          }
+
+          // Capture beat samples
+          beatProcessor.onaudioprocess = (e) => {
+            const inputData = e.inputBuffer.getChannelData(0)
+            const outputData = e.outputBuffer.getChannelData(0)
+            
+            // Store beat samples
+            beatSamplesRef.current.push(new Float32Array(inputData))
+            
+            // Pass through
+            outputData.set(inputData)
+          }
+
+          // Connect microphone -> gain -> processor (for recording only, no monitoring)
           micSource.connect(micGain)
-          micGain.connect(recordingDestination) // Direct connection for cleanest recording
+          micGain.connect(voiceProcessor)
+          // Don't connect voiceProcessor output - user doesn't want to hear their voice
+          // Create a dummy destination to keep the processor active
+          const dummyDestination = context.createGain()
+          dummyDestination.gain.value = 0 // Silent
+          voiceProcessor.connect(dummyDestination)
+          dummyDestination.connect(context.destination) // Required connection, but silent
 
-          // Record the mixed audio with better quality settings
-          const mimeTypes = [
-            'audio/webm;codecs=opus',
-            'audio/webm',
-            'audio/ogg;codecs=opus',
-            'audio/mp4',
-            'audio/webm;codecs=pcm'
-          ]
-          
-          let selectedMimeType = ''
-          for (const mimeType of mimeTypes) {
-            if (MediaRecorder.isTypeSupported(mimeType)) {
-              selectedMimeType = mimeType
-              break
-            }
-          }
-
-          const mediaRecorderOptions: MediaRecorderOptions = selectedMimeType 
-            ? { mimeType: selectedMimeType }
-            : {}
-
-          const mediaRecorder = new MediaRecorder(recordingDestination.stream, mediaRecorderOptions)
-          mediaRecorderRef.current = mediaRecorder
-          audioChunksRef.current = []
-
-          mediaRecorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-              audioChunksRef.current.push(event.data)
-            }
-          }
-
-          mediaRecorder.onstop = () => {
-            // Ensure we have all chunks
-            if (audioChunksRef.current.length > 0) {
-              const mimeType = selectedMimeType || 'audio/webm'
-              const audioBlob = new Blob(audioChunksRef.current, { type: mimeType })
-              onRecordingComplete(audioBlob)
-            }
-            audioChunksRef.current = []
-          }
-
-          mediaRecorder.onerror = (event) => {
-            console.error('MediaRecorder error:', event)
-          }
-
-          // Play beat - no delay needed since we're not processing the mic
+          // Play beat - loop it
           const beatSource = context.createBufferSource()
           beatSource.buffer = beatBufferRef.current
           beatSource.loop = true
           beatSourceRef.current = beatSource
 
-          // Connect beat directly
+          // Connect beat -> gain -> processor -> destination
           beatSource.connect(beatGain)
-          beatGain.connect(recordingDestination) // For recording
-          beatGain.connect(context.destination) // For headphones monitoring
+          beatGain.connect(beatProcessor)
+          beatProcessor.connect(context.destination) // For headphones monitoring
 
-          // Ensure perfect synchronization: start MediaRecorder and beat at the exact same time
-          // Use AudioContext's precise timing to start everything synchronized
-          const startTime = context.currentTime + 0.1 // Small buffer to ensure everything is ready
-          
-          // Start MediaRecorder without timeslice for smoother, less choppy recording
-          // Timeslice can cause choppiness, so we'll capture continuously
-          mediaRecorder.start()
-          
-          // Start beat at the same time - this ensures both mic and beat are recorded in sync
+          // Start recording
+          const startTime = context.currentTime + 0.1
           beatSource.start(startTime)
+          
+          // Store start time for duration calculation
+          recordingStartTimeRef.current = startTime
         } catch (error) {
           console.error('Error starting recording:', error)
           alert('Failed to start recording. Please check microphone permissions.')
@@ -179,18 +175,7 @@ export default function RealTimeAudioProcessor({
 
       startRecording()
     } else {
-      // Stop recording properly
-      if (mediaRecorderRef.current) {
-        if (mediaRecorderRef.current.state === 'recording') {
-          // Request final data before stopping
-          mediaRecorderRef.current.requestData()
-          mediaRecorderRef.current.stop()
-        } else if (mediaRecorderRef.current.state === 'paused') {
-          mediaRecorderRef.current.stop()
-        }
-      }
-
-      // Stop beat
+      // Stop recording and process captured samples
       if (beatSourceRef.current) {
         try {
           beatSourceRef.current.stop()
@@ -200,7 +185,65 @@ export default function RealTimeAudioProcessor({
         beatSourceRef.current = null
       }
 
+      // Calculate duration
+      const duration = audioContextRef.current ? 
+        audioContextRef.current.currentTime - recordingStartTimeRef.current : 0
+      recordingDurationRef.current = duration
+
+      // Process captured samples into AudioBuffers
+      if (voiceSamplesRef.current.length > 0 && beatSamplesRef.current.length > 0 && audioContextRef.current) {
+        const context = audioContextRef.current
+        const sampleRate = context.sampleRate
+        
+        // Calculate total length (use the longer of the two)
+        const voiceLength = voiceSamplesRef.current.reduce((sum, arr) => sum + arr.length, 0)
+        const beatLength = beatSamplesRef.current.reduce((sum, arr) => sum + arr.length, 0)
+        const maxLength = Math.max(voiceLength, beatLength)
+        
+        // Create voice buffer
+        const voiceBuffer = context.createBuffer(1, maxLength, sampleRate)
+        const voiceChannel = voiceBuffer.getChannelData(0)
+        let voiceOffset = 0
+        for (const samples of voiceSamplesRef.current) {
+          voiceChannel.set(samples, voiceOffset)
+          voiceOffset += samples.length
+        }
+        
+        // Create beat buffer (loop it to match voice length)
+        const beatBuffer = context.createBuffer(1, maxLength, sampleRate)
+        const beatChannel = beatBuffer.getChannelData(0)
+        const originalBeatLength = beatBufferRef.current!.length
+        let beatOffset = 0
+        let beatSampleIndex = 0
+        
+        while (beatOffset < maxLength) {
+          const remaining = maxLength - beatOffset
+          const toCopy = Math.min(remaining, originalBeatLength - beatSampleIndex)
+          const originalBeatChannel = beatBufferRef.current!.getChannelData(0)
+          
+          for (let i = 0; i < toCopy; i++) {
+            beatChannel[beatOffset + i] = originalBeatChannel[beatSampleIndex + i]
+          }
+          
+          beatOffset += toCopy
+          beatSampleIndex = (beatSampleIndex + toCopy) % originalBeatLength
+        }
+        
+        // Call completion callback with separate buffers
+        onRecordingCompleteRef.current(voiceBuffer, beatBuffer, duration)
+      }
+
       // Disconnect nodes
+      if (voiceProcessorRef.current) {
+        voiceProcessorRef.current.disconnect()
+        voiceProcessorRef.current = null
+      }
+      
+      if (beatProcessorRef.current) {
+        beatProcessorRef.current.disconnect()
+        beatProcessorRef.current = null
+      }
+
       if (micSourceRef.current) {
         micSourceRef.current.disconnect()
         micSourceRef.current = null
@@ -222,17 +265,7 @@ export default function RealTimeAudioProcessor({
         micStreamRef.current = null
       }
     }
-
-    return () => {
-      // Cleanup on unmount or dependency change
-      if (mediaRecorderRef.current) {
-        if (mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.requestData()
-          mediaRecorderRef.current.stop()
-        }
-      }
-    }
-  }, [isRecording, beatVolume, voiceVolume, onRecordingComplete])
+  }, [isRecording, beatVolume, voiceVolume])
 
   // Update gain levels when volumes change (works during recording too)
   useEffect(() => {

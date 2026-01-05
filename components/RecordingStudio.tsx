@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import BeatPlayer from './BeatPlayer'
 import VoiceRecorder from './VoiceRecorder'
 import EffectsPanel from './EffectsPanel'
@@ -17,6 +17,8 @@ export default function RecordingStudio({ beatFile, beatUrl, onReset }: Recordin
   const [isRecording, setIsRecording] = useState(false)
   const [recordedAudio, setRecordedAudio] = useState<Blob | null>(null)
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null)
+  const [voiceBuffer, setVoiceBuffer] = useState<AudioBuffer | null>(null)
+  const [beatBuffer, setBeatBuffer] = useState<AudioBuffer | null>(null)
   const [autotuneEnabled, setAutotuneEnabled] = useState(false)
   const [autotuneAmount, setAutotuneAmount] = useState(50)
   const [rootNote, setRootNote] = useState('C')
@@ -26,11 +28,78 @@ export default function RecordingStudio({ beatFile, beatUrl, onReset }: Recordin
   const [beatVolume, setBeatVolume] = useState(50)
   const [voiceVolume, setVoiceVolume] = useState(100)
 
-  const handleRecordingComplete = (audioBlob: Blob) => {
-    setRecordedAudio(audioBlob)
-    const url = URL.createObjectURL(audioBlob)
-    setRecordedUrl(url)
+  const handleRecordingComplete = useCallback(async (voiceBuf: AudioBuffer, beatBuf: AudioBuffer, duration: number) => {
+    setVoiceBuffer(voiceBuf)
+    setBeatBuffer(beatBuf)
     setIsRecording(false)
+    
+    // Create a temporary URL for the mixed audio (for backward compatibility)
+    // EffectsPanel will handle the actual mixing with effects
+    const context = new AudioContext()
+    const mixedBuffer = context.createBuffer(2, voiceBuf.length, voiceBuf.sampleRate)
+    const voiceChannel = voiceBuf.getChannelData(0)
+    const beatChannel = beatBuf.getChannelData(0)
+    const leftChannel = mixedBuffer.getChannelData(0)
+    const rightChannel = mixedBuffer.getChannelData(1)
+    
+    for (let i = 0; i < voiceBuf.length; i++) {
+      const mixed = (voiceChannel[i] || 0) + (beatChannel[i] || 0)
+      leftChannel[i] = mixed
+      rightChannel[i] = mixed
+    }
+    
+    // Convert to blob for URL
+    const wav = audioBufferToWav(mixedBuffer)
+    const blob = new Blob([wav], { type: 'audio/wav' })
+    const url = URL.createObjectURL(blob)
+    setRecordedAudio(blob)
+    setRecordedUrl(url)
+  }, [])
+  
+  // Helper function to convert AudioBuffer to WAV
+  const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
+    const length = buffer.length
+    const numberOfChannels = buffer.numberOfChannels
+    const sampleRate = buffer.sampleRate
+    const arrayBuffer = new ArrayBuffer(44 + length * numberOfChannels * 2)
+    const view = new DataView(arrayBuffer)
+    const channels: Float32Array[] = []
+    
+    for (let i = 0; i < numberOfChannels; i++) {
+      channels.push(buffer.getChannelData(i))
+    }
+    
+    // WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i))
+      }
+    }
+    
+    writeString(0, 'RIFF')
+    view.setUint32(4, 36 + length * numberOfChannels * 2, true)
+    writeString(8, 'WAVE')
+    writeString(12, 'fmt ')
+    view.setUint32(16, 16, true)
+    view.setUint16(20, 1, true)
+    view.setUint16(22, numberOfChannels, true)
+    view.setUint32(24, sampleRate, true)
+    view.setUint32(28, sampleRate * numberOfChannels * 2, true)
+    view.setUint16(32, numberOfChannels * 2, true)
+    view.setUint16(34, 16, true)
+    writeString(36, 'data')
+    view.setUint32(40, length * numberOfChannels * 2, true)
+    
+    let offset = 44
+    for (let i = 0; i < length; i++) {
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const sample = Math.max(-1, Math.min(1, channels[channel][i]))
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true)
+        offset += 2
+      }
+    }
+    
+    return arrayBuffer
   }
 
   const handleStartRecording = () => {
@@ -80,7 +149,6 @@ export default function RecordingStudio({ beatFile, beatUrl, onReset }: Recordin
         <VoiceRecorder
           onStart={handleStartRecording}
           onStop={handleStopRecording}
-          onComplete={handleRecordingComplete}
           isRecording={isRecording}
         />
       </div>
@@ -120,9 +188,11 @@ export default function RecordingStudio({ beatFile, beatUrl, onReset }: Recordin
         </div>
       </div>
 
-      {recordedUrl && (
+      {recordedUrl && voiceBuffer && beatBuffer && (
         <EffectsPanel
           audioUrl={recordedUrl}
+          voiceBuffer={voiceBuffer}
+          beatBuffer={beatBuffer}
           autotuneEnabled={autotuneEnabled}
           autotuneAmount={autotuneAmount}
           rootNote={rootNote}

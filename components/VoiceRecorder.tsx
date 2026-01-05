@@ -6,14 +6,12 @@ import styles from './VoiceRecorder.module.css'
 interface VoiceRecorderProps {
   onStart: () => void
   onStop: () => void
-  onComplete: (audioBlob: Blob) => void
   isRecording: boolean
 }
 
 export default function VoiceRecorder({ 
   onStart, 
   onStop, 
-  onComplete,
   isRecording 
 }: VoiceRecorderProps) {
   const [recordingTime, setRecordingTime] = useState(0)

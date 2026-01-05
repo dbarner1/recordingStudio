@@ -1,6 +1,14 @@
-.uploader {
+.container {
   width: 100%;
   max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.uploader {
+  width: 100%;
   padding: 4rem 2rem;
   border: 3px dashed rgba(255, 255, 255, 0.5);
   border-radius: 16px;
@@ -51,5 +59,54 @@
 
 .hiddenInput {
   display: none;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 1rem;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.defaultBeatButton {
+  width: 100%;
+  padding: 1rem 2rem;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-radius: 12px;
+  background: rgba(102, 126, 234, 0.2);
+  backdrop-filter: blur(10px);
+  color: white;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.defaultBeatButton:hover {
+  border-color: rgba(255, 255, 255, 0.8);
+  background: rgba(102, 126, 234, 0.4);
+  transform: translateY(-2px);
+}
+
+.defaultBeatButton:active {
+  transform: translateY(0);
+}
+
+.defaultBeatButton svg {
+  opacity: 0.9;
 }
 

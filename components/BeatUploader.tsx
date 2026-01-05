@@ -5,9 +5,10 @@ import styles from './BeatUploader.module.css'
 
 interface BeatUploaderProps {
   onUpload: (file: File) => void
+  onUseDefaultBeat?: () => void
 }
 
-export default function BeatUploader({ onUpload }: BeatUploaderProps) {
+export default function BeatUploader({ onUpload, onUseDefaultBeat }: BeatUploaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
@@ -44,40 +45,71 @@ export default function BeatUploader({ onUpload }: BeatUploaderProps) {
     setIsDragging(false)
   }
 
+  const handleUseDefaultBeat = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onUseDefaultBeat) {
+      onUseDefaultBeat()
+    }
+  }
+
   return (
-    <div
-      className={`${styles.uploader} ${isDragging ? styles.dragging : ''}`}
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onClick={() => fileInputRef.current?.click()}
-    >
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="audio/*"
-        onChange={handleFileInputChange}
-        className={styles.hiddenInput}
-      />
-      <div className={styles.uploadContent}>
-        <svg
-          width="64"
-          height="64"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="17 8 12 3 7 8" />
-          <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
-        <h2>Upload Your Beat</h2>
-        <p>Click or drag and drop an audio file here</p>
-        <p className={styles.supportedFormats}>Supports: MP3, WAV, OGG, M4A</p>
+    <div className={styles.container}>
+      <div
+        className={`${styles.uploader} ${isDragging ? styles.dragging : ''}`}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="audio/*"
+          onChange={handleFileInputChange}
+          className={styles.hiddenInput}
+        />
+        <div className={styles.uploadContent}>
+          <svg
+            width="64"
+            height="64"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+          <h2>Upload Your Beat</h2>
+          <p>Click or drag and drop an audio file here</p>
+          <p className={styles.supportedFormats}>Supports: MP3, WAV, OGG, M4A</p>
+        </div>
       </div>
+      {onUseDefaultBeat && (
+        <div className={styles.divider}>
+          <span>OR</span>
+        </div>
+      )}
+      {onUseDefaultBeat && (
+        <button onClick={handleUseDefaultBeat} className={styles.defaultBeatButton}>
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+          Use Default Beat
+        </button>
+      )}
     </div>
   )
 }

@@ -24,8 +24,9 @@ export default function RealTimeAudioProcessor({
   const beatGainNodeRef = useRef<GainNode | null>(null)
   const beatBufferRef = useRef<AudioBuffer | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
-  const voiceProcessorRef = useRef<ScriptProcessorNode | null>(null)
-  const beatProcessorRef = useRef<ScriptProcessorNode | null>(null)
+  const voiceProcessorRef = useRef<AudioWorkletNode | null>(null)
+  const beatProcessorRef = useRef<AudioWorkletNode | null>(null)
+  const workletLoadedRef = useRef<boolean>(false)
   const voiceSamplesRef = useRef<Float32Array[]>([])
   const beatSamplesRef = useRef<Float32Array[]>([])
   const recordingStartTimeRef = useRef<number>(0)
@@ -104,40 +105,82 @@ export default function RealTimeAudioProcessor({
           micGain.gain.value = voiceVolume / 100
           beatGain.gain.value = beatVolume / 100
 
-          // Create ScriptProcessorNodes to capture audio data separately
-          const bufferSize = 4096
-          const voiceProcessor = context.createScriptProcessor(bufferSize, 1, 1)
-          const beatProcessor = context.createScriptProcessor(bufferSize, 1, 1)
-          voiceProcessorRef.current = voiceProcessor
-          beatProcessorRef.current = beatProcessor
-
           // Reset sample arrays
           voiceSamplesRef.current = []
           beatSamplesRef.current = []
           recordingStartTimeRef.current = context.currentTime
 
-          // Capture voice samples
-          voiceProcessor.onaudioprocess = (e) => {
-            const inputData = e.inputBuffer.getChannelData(0)
-            const outputData = e.outputBuffer.getChannelData(0)
-            
-            // Store voice samples
-            voiceSamplesRef.current.push(new Float32Array(inputData))
-            
-            // Pass through for monitoring (but don't connect to destination)
-            outputData.set(inputData)
-          }
+          // Create AudioWorkletNodes to capture audio data separately
+          let voiceProcessor: AudioWorkletNode | AudioNode | null = null
+          let beatProcessor: AudioWorkletNode | AudioNode | null = null
 
-          // Capture beat samples
-          beatProcessor.onaudioprocess = (e) => {
-            const inputData = e.inputBuffer.getChannelData(0)
-            const outputData = e.outputBuffer.getChannelData(0)
+          if (workletLoadedRef.current) {
+            try {
+              // Create AudioWorklet nodes
+              voiceProcessor = new AudioWorkletNode(context, 'audio-recorder-processor')
+              beatProcessor = new AudioWorkletNode(context, 'audio-recorder-processor')
+
+              // Handle messages from worklet processors
+              voiceProcessor.port.onmessage = (e) => {
+                if (e.data.type === 'samples') {
+                  voiceSamplesRef.current.push(e.data.samples)
+                }
+              }
+
+              beatProcessor.port.onmessage = (e) => {
+                if (e.data.type === 'samples') {
+                  beatSamplesRef.current.push(e.data.samples)
+                }
+              }
+
+              voiceProcessorRef.current = voiceProcessor
+              beatProcessorRef.current = beatProcessor
+            } catch (error) {
+              console.error('Error creating AudioWorklet nodes:', error)
+              // Fallback: use ScriptProcessorNode if AudioWorklet fails
+              const bufferSize = 4096
+              voiceProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
+              beatProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
+              
+              voiceProcessor.onaudioprocess = (e: any) => {
+                const inputData = e.inputBuffer.getChannelData(0)
+                const outputData = e.outputBuffer.getChannelData(0)
+                voiceSamplesRef.current.push(new Float32Array(inputData))
+                outputData.set(inputData)
+              }
+
+              beatProcessor.onaudioprocess = (e: any) => {
+                const inputData = e.inputBuffer.getChannelData(0)
+                const outputData = e.outputBuffer.getChannelData(0)
+                beatSamplesRef.current.push(new Float32Array(inputData))
+                outputData.set(inputData)
+              }
+
+              voiceProcessorRef.current = voiceProcessor as any
+              beatProcessorRef.current = beatProcessor as any
+            }
+          } else {
+            // Fallback: use ScriptProcessorNode if AudioWorklet is not available
+            const bufferSize = 4096
+            voiceProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
+            beatProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
             
-            // Store beat samples
-            beatSamplesRef.current.push(new Float32Array(inputData))
-            
-            // Pass through
-            outputData.set(inputData)
+            voiceProcessor.onaudioprocess = (e: any) => {
+              const inputData = e.inputBuffer.getChannelData(0)
+              const outputData = e.outputBuffer.getChannelData(0)
+              voiceSamplesRef.current.push(new Float32Array(inputData))
+              outputData.set(inputData)
+            }
+
+            beatProcessor.onaudioprocess = (e: any) => {
+              const inputData = e.inputBuffer.getChannelData(0)
+              const outputData = e.outputBuffer.getChannelData(0)
+              beatSamplesRef.current.push(new Float32Array(inputData))
+              outputData.set(inputData)
+            }
+
+            voiceProcessorRef.current = voiceProcessor as any
+            beatProcessorRef.current = beatProcessor as any
           }
 
           // Connect microphone -> gain -> processor (for recording only, no monitoring)

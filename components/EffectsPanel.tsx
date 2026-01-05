@@ -78,6 +78,23 @@ export default function EffectsPanel({
     }
   }, [audioUrl])
 
+  // Create reverb impulse response
+  const createReverbImpulse = (context: AudioContext, seconds: number, decay: number): AudioBuffer => {
+    const sampleRate = context.sampleRate
+    const length = sampleRate * seconds
+    const impulse = context.createBuffer(2, length, sampleRate)
+    const leftChannel = impulse.getChannelData(0)
+    const rightChannel = impulse.getChannelData(1)
+
+    for (let i = 0; i < length; i++) {
+      const n = length - i
+      leftChannel[i] = (Math.random() * 2 - 1) * Math.pow(n / length, decay)
+      rightChannel[i] = (Math.random() * 2 - 1) * Math.pow(n / length, decay)
+    }
+
+    return impulse
+  }
+
   // Scale definitions (semitone intervals from root)
   const scaleDefinitions: Record<string, number[]> = {
     major: [0, 2, 4, 5, 7, 9, 11], // C, D, E, F, G, A, B

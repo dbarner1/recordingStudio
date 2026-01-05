@@ -1,0 +1,53 @@
+.container {
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.canvas {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  display: block;
+}
+
+.emptyMessage {
+  text-align: center;
+  padding: 2rem;
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.stats {
+  display: flex;
+  gap: 2rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.stat {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.statLabel {
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+.statValue {
+  font-weight: 600;
+  color: #51cf66;
+}
+

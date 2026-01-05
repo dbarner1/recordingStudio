@@ -1,0 +1,55 @@
+.uploader {
+  width: 100%;
+  max-width: 600px;
+  padding: 4rem 2rem;
+  border: 3px dashed rgba(255, 255, 255, 0.5);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-align: center;
+}
+
+.uploader:hover {
+  border-color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.15);
+  transform: translateY(-2px);
+}
+
+.uploader.dragging {
+  border-color: rgba(255, 255, 255, 1);
+  background: rgba(255, 255, 255, 0.2);
+  transform: scale(1.02);
+}
+
+.uploadContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.uploadContent svg {
+  opacity: 0.8;
+}
+
+.uploadContent h2 {
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+.uploadContent p {
+  margin: 0;
+  opacity: 0.8;
+}
+
+.supportedFormats {
+  font-size: 0.9rem;
+  opacity: 0.6;
+}
+
+.hiddenInput {
+  display: none;
+}
+

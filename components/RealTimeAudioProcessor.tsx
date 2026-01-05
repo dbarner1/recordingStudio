@@ -111,76 +111,82 @@ export default function RealTimeAudioProcessor({
           recordingStartTimeRef.current = context.currentTime
 
           // Create AudioWorkletNodes to capture audio data separately
-          let voiceProcessor: AudioWorkletNode | AudioNode | null = null
-          let beatProcessor: AudioWorkletNode | AudioNode | null = null
+          let voiceProcessor: AudioWorkletNode | AudioNode
+          let beatProcessor: AudioWorkletNode | AudioNode
 
           if (workletLoadedRef.current) {
             try {
               // Create AudioWorklet nodes
-              voiceProcessor = new AudioWorkletNode(context, 'audio-recorder-processor')
-              beatProcessor = new AudioWorkletNode(context, 'audio-recorder-processor')
+              const voiceWorklet = new AudioWorkletNode(context, 'audio-recorder-processor')
+              const beatWorklet = new AudioWorkletNode(context, 'audio-recorder-processor')
 
               // Handle messages from worklet processors
-              voiceProcessor.port.onmessage = (e) => {
+              voiceWorklet.port.onmessage = (e) => {
                 if (e.data.type === 'samples') {
                   voiceSamplesRef.current.push(e.data.samples)
                 }
               }
 
-              beatProcessor.port.onmessage = (e) => {
+              beatWorklet.port.onmessage = (e) => {
                 if (e.data.type === 'samples') {
                   beatSamplesRef.current.push(e.data.samples)
                 }
               }
 
-              voiceProcessorRef.current = voiceProcessor
-              beatProcessorRef.current = beatProcessor
+              voiceProcessor = voiceWorklet
+              beatProcessor = beatWorklet
+              voiceProcessorRef.current = voiceWorklet
+              beatProcessorRef.current = beatWorklet
             } catch (error) {
               console.error('Error creating AudioWorklet nodes:', error)
               // Fallback: use ScriptProcessorNode if AudioWorklet fails
               const bufferSize = 4096
-              voiceProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
-              beatProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
+              const voiceScriptProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
+              const beatScriptProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
               
-              voiceProcessor.onaudioprocess = (e: any) => {
+              voiceScriptProcessor.onaudioprocess = (e: any) => {
                 const inputData = e.inputBuffer.getChannelData(0)
                 const outputData = e.outputBuffer.getChannelData(0)
                 voiceSamplesRef.current.push(new Float32Array(inputData))
                 outputData.set(inputData)
               }
 
-              beatProcessor.onaudioprocess = (e: any) => {
+              beatScriptProcessor.onaudioprocess = (e: any) => {
                 const inputData = e.inputBuffer.getChannelData(0)
                 const outputData = e.outputBuffer.getChannelData(0)
                 beatSamplesRef.current.push(new Float32Array(inputData))
                 outputData.set(inputData)
               }
 
-              voiceProcessorRef.current = voiceProcessor as any
-              beatProcessorRef.current = beatProcessor as any
+              voiceProcessor = voiceScriptProcessor
+              beatProcessor = beatScriptProcessor
+              voiceProcessorRef.current = voiceScriptProcessor as any
+              beatProcessorRef.current = beatScriptProcessor as any
             }
           } else {
             // Fallback: use ScriptProcessorNode if AudioWorklet is not available
             const bufferSize = 4096
-            voiceProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
-            beatProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
+            const voiceScriptProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
+            const beatScriptProcessor = context.createScriptProcessor(bufferSize, 1, 1) as any
             
-            voiceProcessor.onaudioprocess = (e: any) => {
+            voiceScriptProcessor.onaudioprocess = (e: any) => {
               const inputData = e.inputBuffer.getChannelData(0)
               const outputData = e.outputBuffer.getChannelData(0)
               voiceSamplesRef.current.push(new Float32Array(inputData))
               outputData.set(inputData)
             }
 
-            beatProcessor.onaudioprocess = (e: any) => {
+            beatScriptProcessor.onaudioprocess = (e: any) => {
               const inputData = e.inputBuffer.getChannelData(0)
               const outputData = e.outputBuffer.getChannelData(0)
               beatSamplesRef.current.push(new Float32Array(inputData))
               outputData.set(inputData)
             }
 
-            voiceProcessorRef.current = voiceProcessor as any
-            beatProcessorRef.current = beatProcessor as any
+            voiceProcessor = voiceScriptProcessor
+            beatProcessor = beatScriptProcessor
+            voiceProcessorRef.current = voiceScriptProcessor as any
+            beatProcessorRef.current = beatScriptProcessor as any
           }
 
           // Connect microphone -> gain -> processor (for recording only, no monitoring)

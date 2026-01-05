@@ -14,12 +14,14 @@ interface EffectsPanelProps {
   scaleType: string
   reverbAmount: number
   echoAmount: number
+  pitchShift: number
   onAutotuneToggle: (enabled: boolean) => void
   onAutotuneChange: (amount: number) => void
   onRootNoteChange: (note: string) => void
   onScaleTypeChange: (scale: string) => void
   onReverbChange: (amount: number) => void
   onEchoChange: (amount: number) => void
+  onPitchShiftChange: (shift: number) => void
   beatVolume: number
   voiceVolume: number
   onBeatVolumeChange: (volume: number) => void
@@ -36,12 +38,14 @@ export default function EffectsPanel({
   scaleType,
   reverbAmount,
   echoAmount,
+  pitchShift,
   onAutotuneToggle,
   onAutotuneChange,
   onRootNoteChange,
   onScaleTypeChange,
   onReverbChange,
   onEchoChange,
+  onPitchShiftChange,
   beatVolume,
   voiceVolume,
   onBeatVolumeChange,
@@ -81,8 +85,46 @@ export default function EffectsPanel({
     }
   }, [voiceBuffer])
 
+  // Apply pitch shift to audio buffer (negative semitones = lower pitch)
+  const applyPitchShift = (buffer: AudioBuffer, semitones: number): AudioBuffer => {
+    const context = new AudioContext()
+    const sampleRate = buffer.sampleRate
+    const length = buffer.length
+    const numberOfChannels = buffer.numberOfChannels
+    
+    // Calculate pitch ratio (2^(-semitones/12))
+    const pitchRatio = Math.pow(2, semitones / 12)
+    
+    // Create output buffer (longer if pitch is lower)
+    const outputLength = Math.floor(length / pitchRatio)
+    const outputBuffer = context.createBuffer(numberOfChannels, outputLength, sampleRate)
+    
+    // Resample using linear interpolation
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const inputData = buffer.getChannelData(channel)
+      const outputData = outputBuffer.getChannelData(channel)
+      
+      for (let i = 0; i < outputLength; i++) {
+        const sourceIndex = i * pitchRatio
+        const index = Math.floor(sourceIndex)
+        const fraction = sourceIndex - index
+        
+        if (index + 1 < length) {
+          // Linear interpolation
+          outputData[i] = inputData[index] * (1 - fraction) + inputData[index + 1] * fraction
+        } else if (index < length) {
+          outputData[i] = inputData[index]
+        } else {
+          outputData[i] = 0
+        }
+      }
+    }
+    
+    return outputBuffer
+  }
+
   // Create reverb impulse response
-  const createReverbImpulse = (context: AudioContext, seconds: number, decay: number): AudioBuffer => {
+  const createReverbImpulse = (context: AudioContext | OfflineAudioContext, seconds: number, decay: number): AudioBuffer => {
     const sampleRate = context.sampleRate
     const length = sampleRate * seconds
     const impulse = context.createBuffer(2, length, sampleRate)
@@ -468,13 +510,18 @@ export default function EffectsPanel({
     // Stop any currently playing audio
     stopAudio()
 
-    // Process voice with autotune if enabled
+    // Process voice with pitch shift first
     let processedVoiceBuffer = voiceBuffer
+    if (pitchShift > 0) {
+      processedVoiceBuffer = applyPitchShift(voiceBuffer, -pitchShift)
+    }
+
+    // Process voice with autotune if enabled
     if (autotuneEnabled && autotuneAmount > 0) {
       // Clear previous pitch data before processing
       setPitchData([])
       // Process with autotune - this will populate pitchData (async)
-      processedVoiceBuffer = await applyAutotune(voiceBuffer)
+      processedVoiceBuffer = await applyAutotune(processedVoiceBuffer)
     } else {
       // When autotune is disabled, still collect pitch data for visualization
       // but don't apply corrections
@@ -612,6 +659,209 @@ export default function EffectsPanel({
     setIsPlaying(false)
   }
 
+  // Render final mix with all effects and convert to MP3
+  const downloadAsMP3 = async () => {
+    if (!voiceBuffer || !beatBuffer || !audioContextRef.current) return
+
+    setIsProcessing(true)
+    setProcessingProgress(0)
+
+    try {
+      const context = audioContextRef.current
+      
+      // Process voice with pitch shift first
+      let processedVoiceBuffer = voiceBuffer
+      if (pitchShift > 0) {
+        setProcessingProgress(20)
+        processedVoiceBuffer = applyPitchShift(voiceBuffer, -pitchShift)
+      }
+
+      // Process voice with autotune if enabled
+      if (autotuneEnabled && autotuneAmount > 0) {
+        setProcessingProgress(40)
+        processedVoiceBuffer = await applyAutotune(processedVoiceBuffer)
+      }
+
+      setProcessingProgress(50)
+
+      // Create offline audio context to render the final mix
+      const offlineContext = new OfflineAudioContext(
+        2, // stereo
+        Math.max(processedVoiceBuffer.length, beatBuffer.length),
+        context.sampleRate
+      )
+
+      // Create sources
+      const voiceSource = offlineContext.createBufferSource()
+      const beatSource = offlineContext.createBufferSource()
+      voiceSource.buffer = processedVoiceBuffer
+      beatSource.buffer = beatBuffer
+
+      // Loop beat if needed
+      const voiceDuration = processedVoiceBuffer.duration
+      const beatDuration = beatBuffer.duration
+      if (beatDuration < voiceDuration) {
+        beatSource.loop = true
+      }
+
+      // Create gain nodes
+      const voiceGain = offlineContext.createGain()
+      const beatGain = offlineContext.createGain()
+      const masterGain = offlineContext.createGain()
+
+      voiceGain.gain.value = (voiceVolume / 100) * (playbackVolume / 100) * defaultGainBoost
+      beatGain.gain.value = (beatVolume / 100) * (playbackVolume / 100)
+      masterGain.gain.value = 1.0
+
+      // Connect voice with effects
+      voiceSource.connect(voiceGain)
+      let voiceNode: AudioNode = voiceGain
+
+      // Add reverb if enabled
+      if (reverbAmount > 0) {
+        const reverbConvolver = offlineContext.createConvolver()
+        const dryGain = offlineContext.createGain()
+        const wetGain = offlineContext.createGain()
+
+        const impulseResponse = createReverbImpulse(offlineContext, 2, 2)
+        reverbConvolver.buffer = impulseResponse
+
+        const wetAmount = reverbAmount / 100
+        dryGain.gain.value = 1 - wetAmount * 0.5
+        wetGain.gain.value = wetAmount * 0.5
+
+        voiceNode.connect(dryGain)
+        voiceNode.connect(reverbConvolver)
+        reverbConvolver.connect(wetGain)
+
+        const merger = offlineContext.createGain()
+        dryGain.connect(merger)
+        wetGain.connect(merger)
+
+        voiceNode = merger
+      }
+
+      // Add echo if enabled
+      if (echoAmount > 0) {
+        const delay = offlineContext.createDelay(1.0)
+        const delayGain = offlineContext.createGain()
+        const feedbackGain = offlineContext.createGain()
+        const echoMix = offlineContext.createGain()
+
+        delay.delayTime.value = 0.3
+        delayGain.gain.value = echoAmount / 100
+        feedbackGain.gain.value = (echoAmount / 100) * 0.3
+        echoMix.gain.value = 1.0
+
+        voiceNode.connect(echoMix)
+        voiceNode.connect(delay)
+        delay.connect(delayGain)
+        delay.connect(feedbackGain)
+        feedbackGain.connect(delay)
+        delayGain.connect(echoMix)
+
+        voiceNode = echoMix
+      }
+
+      // Connect everything
+      voiceNode.connect(masterGain)
+      beatSource.connect(beatGain)
+      beatGain.connect(masterGain)
+      masterGain.connect(offlineContext.destination)
+
+      setProcessingProgress(75)
+
+      // Start sources
+      voiceSource.start(0)
+      beatSource.start(0)
+
+      // Render audio
+      const renderedBuffer = await offlineContext.startRendering()
+
+      setProcessingProgress(90)
+
+      // Convert to MP3
+      await convertToMP3(renderedBuffer)
+
+      setIsProcessing(false)
+      setProcessingProgress(100)
+    } catch (error) {
+      console.error('Error creating MP3:', error)
+      alert('Failed to create MP3. Please try again.')
+      setIsProcessing(false)
+      setProcessingProgress(0)
+    }
+  }
+
+  // Convert AudioBuffer to MP3 using lamejs
+  const convertToMP3 = async (buffer: AudioBuffer): Promise<void> => {
+    // Load lamejs from CDN
+    let lamejs: any
+    if (typeof window !== 'undefined' && (window as any).lamejs) {
+      lamejs = (window as any).lamejs
+    } else {
+      // Load from CDN
+      await new Promise<void>((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = 'https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js'
+        script.onload = () => {
+          lamejs = (window as any).lamejs
+          resolve()
+        }
+        script.onerror = () => reject(new Error('Failed to load MP3 encoder'))
+        document.head.appendChild(script)
+      })
+    }
+    
+    const mp3encoder = new lamejs.Mp3Encoder(2, buffer.sampleRate, 128) // stereo, sampleRate, bitrate
+
+    const leftChannel = buffer.getChannelData(0)
+    const rightChannel = buffer.getChannelData(1)
+    const sampleBlockSize = 1152
+    const mp3Data: Int8Array[] = []
+
+    // Convert float samples to 16-bit PCM
+    const samples = new Int16Array(sampleBlockSize * 2)
+    for (let i = 0; i < buffer.length; i += sampleBlockSize) {
+      const left = leftChannel.subarray(i, i + sampleBlockSize)
+      const right = rightChannel.subarray(i, i + sampleBlockSize)
+      
+      for (let j = 0; j < left.length; j++) {
+        samples[j * 2] = Math.max(-32768, Math.min(32767, left[j] * 32768))
+        samples[j * 2 + 1] = Math.max(-32768, Math.min(32767, right[j] * 32768))
+      }
+
+      const mp3buf = mp3encoder.encodeBuffer(samples)
+      if (mp3buf.length > 0) {
+        mp3Data.push(mp3buf)
+      }
+    }
+
+    // Flush remaining data
+    const mp3buf = mp3encoder.flush()
+    if (mp3buf.length > 0) {
+      mp3Data.push(mp3buf)
+    }
+
+    // Create blob and download - convert Int8Array[] to BlobPart[]
+    const blobParts: BlobPart[] = mp3Data.map(arr => {
+      // Create a new ArrayBuffer to ensure compatibility
+      const buffer = new ArrayBuffer(arr.byteLength)
+      const view = new Uint8Array(buffer)
+      view.set(new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength))
+      return view
+    })
+    const blob = new Blob(blobParts, { type: 'audio/mp3' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `recording-${Date.now()}.mp3`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   // Update playback volume when it changes
   useEffect(() => {
     if (gainNodeRef.current && isPlaying) {
@@ -727,6 +977,30 @@ export default function EffectsPanel({
       </div>
 
       <div className={styles.effect}>
+        <h4 className={styles.volumeTitle}>Pitch Shift</h4>
+        <div className={styles.effectControls}>
+          <label className={styles.selectLabel}>
+            Lower voice by:
+            <select
+              value={pitchShift}
+              onChange={(e) => onPitchShiftChange(Number(e.target.value))}
+              className={styles.select}
+            >
+              <option value="0">None</option>
+              <option value="1">1 semitone (1x)</option>
+              <option value="2">2 semitones (2x)</option>
+              <option value="3">3 semitones (3x)</option>
+              <option value="4">4 semitones (4x)</option>
+              <option value="5">5 semitones (5x)</option>
+            </select>
+          </label>
+          <p className={styles.note}>
+            Lowers the pitch of your voice by the selected number of semitones.
+          </p>
+        </div>
+      </div>
+
+      <div className={styles.effect}>
         <h4 className={styles.volumeTitle}>Playback Volume</h4>
         <div className={styles.volumeControls}>
           <div className={styles.volumeControl}>
@@ -766,13 +1040,22 @@ export default function EffectsPanel({
       )}
 
       <div className={styles.playback}>
-        <button
-          onClick={isPlaying ? stopAudio : playAudio}
-          className={`${styles.playButton} ${isPlaying ? styles.stopButton : ''}`}
-          disabled={isProcessing}
-        >
-          {isProcessing ? '⏳ Processing...' : isPlaying ? '⏹ Stop' : '▶ Play with Effects'}
-        </button>
+        <div className={styles.playbackButtons}>
+          <button
+            onClick={isPlaying ? stopAudio : playAudio}
+            className={`${styles.playButton} ${isPlaying ? styles.stopButton : ''}`}
+            disabled={isProcessing}
+          >
+            {isProcessing ? '⏳ Processing...' : isPlaying ? '⏹ Stop' : '▶ Play with Effects'}
+          </button>
+          <button
+            onClick={downloadAsMP3}
+            className={styles.downloadButton}
+            disabled={isProcessing || isPlaying}
+          >
+            {isProcessing ? '⏳ Creating MP3...' : '⬇ Download MP3'}
+          </button>
+        </div>
       </div>
 
       {audioBuffer && (

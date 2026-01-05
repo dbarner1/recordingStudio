@@ -15,9 +15,13 @@ export default function BeatPlayer({ beatUrl, isPlaying }: BeatPlayerProps) {
     const audio = audioRef.current
     if (!audio) return
 
+    // Don't play HTML audio when recording - RealTimeAudioProcessor handles playback
+    // This prevents the beat from playing twice
     if (isPlaying) {
+      // When recording, RealTimeAudioProcessor plays the beat via Web Audio API
+      // So we don't need to play the HTML audio element
+      audio.pause()
       audio.currentTime = 0
-      audio.play().catch(console.error)
     } else {
       audio.pause()
     }

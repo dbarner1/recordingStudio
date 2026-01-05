@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState, useEffect } from 'react'
+import GhostWriting from './GhostWriting'
 import styles from './VoiceRecorder.module.css'
 
 interface VoiceRecorderProps {
@@ -73,6 +74,7 @@ export default function VoiceRecorder({
   return (
     <div className={styles.recorder}>
       <h3>Voice Recorder</h3>
+      <GhostWriting isRecording={isRecording} />
       <div className={styles.controls}>
         {!isRecording ? (
           <button 

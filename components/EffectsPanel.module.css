@@ -176,6 +176,13 @@
   justify-content: center;
 }
 
+.playbackButtons {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
 .playButton {
   padding: 1rem 2rem;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -189,7 +196,7 @@
   box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
 }
 
-.playButton:hover {
+.playButton:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
 }
@@ -199,11 +206,34 @@
   box-shadow: 0 4px 15px rgba(245, 87, 108, 0.4);
 }
 
-.playButton.stopButton:hover {
+.playButton.stopButton:hover:not(:disabled) {
   box-shadow: 0 6px 20px rgba(245, 87, 108, 0.6);
 }
 
 .playButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.downloadButton {
+  padding: 1rem 2rem;
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+  border: none;
+  border-radius: 12px;
+  color: white;
+  cursor: pointer;
+  font-size: 1.1rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 15px rgba(17, 153, 142, 0.4);
+}
+
+.downloadButton:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(17, 153, 142, 0.6);
+}
+
+.downloadButton:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

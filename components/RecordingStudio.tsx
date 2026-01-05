@@ -25,6 +25,7 @@ export default function RecordingStudio({ beatFile, beatUrl, onReset }: Recordin
   const [scaleType, setScaleType] = useState('major')
   const [reverbAmount, setReverbAmount] = useState(0)
   const [echoAmount, setEchoAmount] = useState(0)
+  const [pitchShift, setPitchShift] = useState(0)
   const [beatVolume, setBeatVolume] = useState(50)
   const [voiceVolume, setVoiceVolume] = useState(100)
 
@@ -199,12 +200,14 @@ export default function RecordingStudio({ beatFile, beatUrl, onReset }: Recordin
           scaleType={scaleType}
           reverbAmount={reverbAmount}
           echoAmount={echoAmount}
+          pitchShift={pitchShift}
           onAutotuneToggle={setAutotuneEnabled}
           onAutotuneChange={setAutotuneAmount}
           onRootNoteChange={setRootNote}
           onScaleTypeChange={setScaleType}
           onReverbChange={setReverbAmount}
           onEchoChange={setEchoAmount}
+          onPitchShiftChange={setPitchShift}
           beatVolume={beatVolume}
           voiceVolume={voiceVolume}
           onBeatVolumeChange={setBeatVolume}
